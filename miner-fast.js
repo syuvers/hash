@@ -27,7 +27,9 @@ function requireEnv() {
   }
 }
 
-function findNonce(challenge, difficulty) {
+const POLL_INTERVAL = parseInt(process.env.POLL_INTERVAL || "30") * 1000; // default 30s
+
+function findNonce(challenge, difficulty, contract, wallet) {
   return new Promise((resolve, reject) => {
     const proc = spawn(MINER_BIN, [
       challenge,
@@ -36,6 +38,20 @@ function findNonce(challenge, difficulty) {
     ]);
 
     let output = "";
+    let killed = false;
+
+    // Poll challenge every POLL_INTERVAL — if changed, kill miner
+    const poller = setInterval(async () => {
+      try {
+        const fresh = await contract.getChallenge(wallet.address);
+        if (fresh !== challenge) {
+          clearInterval(poller);
+          killed = true;
+          proc.kill();
+          reject(new Error("CHALLENGE_CHANGED"));
+        }
+      } catch (_) {} // ignore RPC errors during poll
+    }, POLL_INTERVAL);
 
     proc.stdout.on("data", (data) => {
       const text = data.toString();
@@ -43,6 +59,7 @@ function findNonce(challenge, difficulty) {
       output += text;
       const m = output.match(/FOUND nonce\s*:\s*(\d+)/);
       if (m) {
+        clearInterval(poller);
         resolve(BigInt(m[1]));
         proc.kill();
       }
@@ -51,13 +68,17 @@ function findNonce(challenge, difficulty) {
     proc.stderr.on("data", (data) => process.stderr.write(data.toString()));
 
     proc.on("error", (err) => {
-      reject(new Error("Gagal jalankan miner binary: " + err.message +
-        "\nCompile AVX2: gcc -O3 -mavx2 -o miner-avx2 miner-avx2.c -lpthread" +
-        "\nCompile scalar: gcc -O3 -o miner-c miner.c -lpthread"));
+      clearInterval(poller);
+      if (!killed) {
+        reject(new Error("Gagal jalankan miner binary: " + err.message +
+          "\nCompile AVX2: gcc -O3 -mavx2 -o miner-avx2 miner-avx2.c -lpthread" +
+          "\nCompile scalar: gcc -O3 -o miner-c miner.c -lpthread"));
+      }
     });
 
     proc.on("close", (code) => {
-      if (code !== 0 && code !== null) reject(new Error("miner-c exit: " + code));
+      clearInterval(poller);
+      if (!killed && code !== 0 && code !== null) reject(new Error("miner exit: " + code));
     });
   });
 }
@@ -96,9 +117,17 @@ async function main() {
     const startTime = Date.now();
 
     try {
-      const nonce   = await findNonce(challenge, difficulty);
+      const nonce   = await findNonce(challenge, difficulty, contract, wallet);
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
       console.log(`\n⏱  Waktu   : ${elapsed}s`);
+
+      // Pre-submit validation: simulate TX before sending
+      try {
+        await contract.mine.staticCall(nonce);
+      } catch (simErr) {
+        console.log("⚠️  Nonce invalid (challenge mungkin berubah), skip...");
+        continue;
+      }
 
       const tx = await contract.mine(nonce, { gasLimit: 500_000 });
       console.log(`📡 TX sent : ${tx.hash}`);
@@ -106,6 +135,10 @@ async function main() {
       const receipt = await tx.wait();
       console.log(`🎉 Success! Block #${receipt.blockNumber}`);
     } catch (err) {
+      if (err.message === "CHALLENGE_CHANGED") {
+        console.log("\n⚠️  Challenge changed (new epoch), restarting...");
+        continue;
+      }
       console.error("\n❌ Error:", err.shortMessage || err.message);
       console.log("   Retry dalam 5 detik...");
       await new Promise((r) => setTimeout(r, 5000));
