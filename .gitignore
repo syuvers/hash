@@ -9,3 +9,4 @@ pnpm-debug.log*
 # Compiled binaries
 miner-c
 miner-avx2
+miner-avx512
