@@ -8,7 +8,7 @@ const path       = require("path");
 const RPC_URL      = process.env.RPC_URL;
 const PRIVATE_KEY  = process.env.PRIVATE_KEY;
 const NUM_THREADS  = parseInt(process.env.WORKERS || os.cpus().length);
-const MINER_BIN    = path.join(__dirname, "miner-c");
+const MINER_BIN    = path.join(__dirname, process.env.MINER_BIN || "miner-avx2");
 const CONTRACT_ADDRESS = "0xAC7b5d06fa1e77D08aea40d46cB7C5923A87A0cc";
 const ABI = [
   "function getChallenge(address miner) view returns (bytes32)",
@@ -51,8 +51,9 @@ function findNonce(challenge, difficulty) {
     proc.stderr.on("data", (data) => process.stderr.write(data.toString()));
 
     proc.on("error", (err) => {
-      reject(new Error("Gagal jalankan miner-c: " + err.message +
-        "\nPastikan sudah compile: gcc -O3 -o miner-c miner.c -lpthread"));
+      reject(new Error("Gagal jalankan miner binary: " + err.message +
+        "\nCompile AVX2: gcc -O3 -mavx2 -o miner-avx2 miner-avx2.c -lpthread" +
+        "\nCompile scalar: gcc -O3 -o miner-c miner.c -lpthread"));
     });
 
     proc.on("close", (code) => {
