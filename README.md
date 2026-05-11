@@ -1,166 +1,99 @@
-# HASH256 CLI Miner
+# HASH256 Miner
 
-CLI miner untuk HASH256 dari `https://hash256.org/mine`.
+High-performance CPU miner for the HASH256 token on Ethereum. Uses a hybrid architecture: C for hashing (Keccak-256) and Node.js for blockchain interaction.
 
-Script ini mengambil challenge dari smart contract, mencari nonce yang memenuhi difficulty, lalu submit transaksi `mine(nonce)` ke Ethereum mainnet.
+## Performance
 
-## Peringatan
+| Mode | Speed (24 threads) | Description |
+|------|-------------------|-------------|
+| **AVX2 (default)** | ~132M hash/s | 4-way SIMD parallel, recommended |
+| Scalar | ~56M hash/s | Fallback for older CPUs |
 
-- Mining ini memakai Ethereum mainnet.
-- Wallet harus punya ETH untuk gas.
-- Jangan pakai private key wallet utama. Lebih aman pakai wallet baru khusus mining.
-- Jangan commit file `.env`.
-- Verifikasi sendiri alamat kontrak sebelum mengirim transaksi: `https://etherscan.io/address/0xAC7b5d06fa1e77D08aea40d46cB7C5923A87A0cc`.
+## Requirements
 
-## Kebutuhan
+- Linux (Ubuntu recommended)
+- GCC with AVX2 support
+- Node.js >= 18
+- CPU with AVX2 (Intel Haswell+ / AMD Zen+)
 
-- Ubuntu/VPS
-- Node.js 18 atau lebih baru
-- npm
-- Wallet Ethereum
-- Private key wallet
-- ETH untuk gas
-- RPC Ethereum mainnet
-
-## Install Node.js dan npm
-
-Kalau memakai user biasa Ubuntu:
+## Quick Start
 
 ```bash
-cd ~
-
-sudo apt update
-sudo apt install -y curl ca-certificates gnupg
-
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash -
-sudo apt install -y nodejs
-
-node -v
-npm -v
-```
-
-Kalau login sebagai root:
-
-```bash
-cd ~
-
-apt update
-apt install -y curl ca-certificates gnupg
-
-curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-apt install -y nodejs
-
-node -v
-npm -v
-```
-
-## Setup Project
-
-```bash
-git clone <URL_REPO_KAMU>
-cd hash256-cli
-
+# 1. Install dependencies
 npm install
+
+# 2. Configure
 cp .env.example .env
-nano .env
+# Edit .env with your RPC_URL and PRIVATE_KEY
+
+# 3. Compile miner (pick one)
+gcc -O3 -mavx2 -o miner-avx2 miner-avx2.c -lpthread   # AVX2 (faster)
+gcc -O3 -o miner-c miner.c -lpthread                    # Scalar (fallback)
+
+# 4. Run
+node miner-fast.js
 ```
 
-Isi `.env`:
+## Configuration
 
-```env
-RPC_URL=https://ethereum-rpc.publicnode.com
-PRIVATE_KEY=0xPRIVATE_KEY_WALLET_KAMU
-```
+Environment variables (set in `.env` or inline):
 
-Simpan di nano:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RPC_URL` | - | Ethereum RPC endpoint (required) |
+| `PRIVATE_KEY` | - | Wallet private key with 0x prefix (required) |
+| `WORKERS` | CPU count | Number of mining threads |
+| `MINER_BIN` | `miner-avx2` | Binary to use (`miner-avx2` or `miner-c`) |
 
-```text
-CTRL + X
-Y
-Enter
-```
-
-## Cek State Kontrak
+### Examples
 
 ```bash
-npm run check
+# Use 24 threads with AVX2
+WORKERS=24 node miner-fast.js
+
+# Use scalar miner (no AVX2 support)
+MINER_BIN=miner-c WORKERS=24 node miner-fast.js
+
+# Check contract state without mining
+node check-state.js
 ```
 
-Output akan menampilkan `genesisState` dan `miningState`.
+## Architecture
 
-## Jalankan Miner
-
-```bash
-npm start
+```
+miner-fast.js (Node.js)
+    |
+    |-- Fetches challenge + difficulty from contract
+    |-- Spawns C miner binary
+    |-- Parses found nonce from stdout
+    |-- Submits mine() transaction
+    |
+    v
+miner-avx2 / miner-c (C binary)
+    |
+    |-- Multi-threaded Keccak-256 hashing
+    |-- AVX2: 4 nonces per thread per cycle
+    |-- Outputs found nonce to stdout
 ```
 
-Contoh output:
+## File Structure
 
-```text
-Wallet: 0x....
-Contract: 0xAC7b5d06fa1e77D08aea40d46cB7C5923A87A0cc
-
-Era: ...
-Reward: ... HASH
-Difficulty: ...
-Epoch: ...
-Challenge: 0x...
-........
-FOUND nonce: ...
-Hash: 0x...
-TX sent: 0x...
-Success block: ...
+```
+miner-avx2.c    # AVX2 4-way parallel Keccak-256 miner (recommended)
+miner.c         # Scalar Keccak-256 miner (fallback)
+miner-fast.js   # Node.js orchestrator (TX submission)
+check-state.js  # Utility: check contract mining state
+.env.example    # Environment config template
+package.json    # Node.js dependencies
 ```
 
-## Error Umum
+## Contract
 
-### `npm: command not found`
+- Address: `0xAC7b5d06fa1e77D08aea40d46cB7C5923A87A0cc`
+- Token: HASH256
+- Reward: 100 HASH per valid nonce
+- Algorithm: `keccak256(abi.encodePacked(challenge, nonce)) < difficulty`
 
-Node.js/npm belum terinstall.
+## License
 
-```bash
-sudo apt update
-sudo apt install -y nodejs npm
-```
-
-Atau pakai NodeSource seperti instruksi install di atas.
-
-### Permission denied saat `apt update`
-
-Kamu bukan root.
-
-```bash
-sudo apt update
-sudo apt install -y nodejs npm
-```
-
-### `Isi RPC_URL dan PRIVATE_KEY di file .env dulu`
-
-File `.env` belum dibuat atau isinya belum benar.
-
-```bash
-cat .env
-```
-
-Harus ada:
-
-```env
-RPC_URL=...
-PRIVATE_KEY=...
-```
-
-### `insufficient funds`
-
-Wallet tidak punya ETH untuk gas. Isi ETH dulu ke wallet tersebut.
-
-### `execution reverted`
-
-Kemungkinan mining belum aktif, nonce tidak valid, atau state kontrak berubah. Jalankan ulang miner atau cek state kontrak.
-
-### `InsufficientWork`
-
-Nonce yang ditemukan tidak memenuhi difficulty saat transaksi diproses. Jalankan ulang miner.
-
-### `GenesisNotComplete`
-
-Mining belum dibuka oleh kontrak. Tunggu sampai genesis selesai.
+MIT
